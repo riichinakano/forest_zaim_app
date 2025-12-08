@@ -1,0 +1,19 @@
+# 林業財務分析アプリ (forest_zaim_app) - 必要ライブラリ
+# Python 3.9以上で動作確認
+
+# Webアプリケーションフレームワーク
+streamlit>=1.28.0
+
+# データ処理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# グラフ描画
+plotly>=5.17.0
+
+# Excel出力
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# 日本語フォント対応（オプション）
+japanize-matplotlib>=1.1.3
