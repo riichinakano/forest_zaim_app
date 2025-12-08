@@ -61,5 +61,10 @@ data/monthly_pl/*.csv
 # Logs
 *.log
 
+# Tunneling tools
+ngrok
+ngrok.tgz
+*.zip
+
 # OS
 Thumbs.db
