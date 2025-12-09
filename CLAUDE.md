@@ -7,20 +7,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## プロジェクト概要
 
 **目的:**
-月次損益計算書データを可視化し、複数年度の推移を分析するStreamlitアプリケーション
+月次損益計算書（PL）・貸借対照表（BS）データを可視化し、複数年度の推移を分析するStreamlitアプリケーション
 
 **ユーザー:**
 林業経営者（小規模事業者）
 
 **実装済み機能:**
-1. 月次推移グラフ表示（Plotly折れ線グラフ）
-2. 複数年度比較（最大5年度）
-3. **3階層の集計機能**:
-   - 個別科目（例: 売上高、役員報酬）
-   - 中分類合算（製造原価、販管費、営業外収益、営業外費用、特別損失）
-   - 大分類合算（収益、費用）
-4. データテーブル表示（年間合計・前年比・月度平均）
-5. CSV/Excelエクスポート
+1. **タブUI**: PL（損益計算書）とBS（貸借対照表）をタブで切り替え
+2. 月次推移グラフ表示（Plotly折れ線グラフ）
+   - PL: 月次推移（フローデータ）
+   - BS: 月次残高推移（ストックデータ）
+3. 複数年度比較（最大5年度）
+4. **3階層の集計機能**:
+   - **PL**: 個別科目、中分類合算（製造原価、販管費等）、大分類合算（収益、費用）
+   - **BS**: 個別科目、中分類合算（現金及び預金、有形固定資産等）、大分類合算（流動資産、固定資産、流動負債、固定負債、純資産）
+5. データテーブル表示（年間合計・前年比・**月度平均行**）
+6. CSV/Excelエクスポート
 
 ## コマンド
 
@@ -125,9 +127,11 @@ except UnicodeDecodeError:
 
 ## データ仕様
 
-### CSVファイル形式
+### PL（損益計算書）データ
 
 **ファイル名規則:** `{年度}_monthly.csv` (例: `R6_monthly.csv`, `H27_monthly.csv`)
+
+**保存先:** `data/monthly_pl/`
 
 **列構成:**
 ```csv
@@ -136,12 +140,41 @@ except UnicodeDecodeError:
 
 **エンコーディング:** Shift-JIS（必須）
 
-### 科目マスタ（config/account_master.csv）
+### BS（貸借対照表）データ
 
+**ファイル名規則:** `{年度}_monthly_bs.csv` (例: `R6_monthly_bs.csv`)
+
+**保存先:** `data/monthly_bs/`
+
+**列構成:**
+```csv
+コード,科目名称,4月（当月残高）,5月（当月残高）,...,3月（当月残高）
+```
+
+**重要な違い:**
+- 列名が「科目コード」ではなく「**コード**」
+- 月次列名に「当月残高」が含まれる（例: `4月（当月残高）`）
+- データは**ストック（残高）**であり、PLの累計金額とは性質が異なる
+
+**科目コード範囲:** 111-399, 920（400-899は損益科目のため除外）
+
+**エンコーディング:** Shift-JIS（必須）
+
+### 科目マスタ
+
+**PL科目マスタ（config/account_master.csv）:**
 ```csv
 科目コード,科目名,大分類,中分類,固定費区分,表示順
 410,売上高,収益,売上,変動費,1
 620,役員報酬,費用,販管費,固定費,20
+```
+
+**BS科目マスタ（config/bs_account_master.csv）:**
+```csv
+科目コード,科目名,大分類,中分類,表示順
+111,現金,流動資産,現金及び預金,1
+130,南都普通,流動資産,現金及び預金,2
+210,立木,固定資産,有形固定資産,6
 ```
 
 **エンコーディング:** UTF-8推奨
@@ -151,14 +184,24 @@ except UnicodeDecodeError:
 ```
 modules/
 ├── data_loader.py      # データ読み込み・前処理
-│   ├── load_monthly_data()      # 全年度の月次データ統合
-│   ├── load_account_master()    # 科目マスタ読み込み
-│   ├── get_available_years()    # 利用可能年度リスト取得
-│   └── sort_years()             # 年度ソート（平成→令和）
+│   # PL用関数
+│   ├── load_monthly_data()      # 全年度のPL月次データ統合
+│   ├── load_account_master()    # PL科目マスタ読み込み
+│   ├── get_available_years()    # 利用可能PL年度リスト取得
+│   ├── sort_years()             # 年度ソート（平成→令和）
+│   # BS用関数（Phase 1.5で追加）
+│   ├── load_bs_monthly_data()   # 全年度のBS月次データ統合
+│   ├── load_bs_account_master() # BS科目マスタ読み込み
+│   └── get_available_bs_years() # 利用可能BS年度リスト取得
 │
 ├── visualizer.py       # グラフ・テーブル作成
-│   ├── create_monthly_trend_chart()  # 月次推移グラフ（3階層対応）
-│   ├── create_comparison_table()     # 年度比較テーブル（3階層対応）
+│   # PL用関数
+│   ├── create_monthly_trend_chart()  # PL月次推移グラフ（3階層対応）
+│   ├── create_comparison_table()     # PL年度比較テーブル（3階層対応、月度平均行含む）
+│   # BS用関数（Phase 1.5で追加）
+│   ├── create_bs_monthly_trend_chart()  # BS月次残高推移グラフ（3階層対応）
+│   ├── create_bs_comparison_table()     # BS年度比較テーブル（3階層対応、月度平均行含む）
+│   # 共通関数
 │   ├── format_currency()             # 金額フォーマット
 │   └── format_percentage()           # パーセンテージフォーマット
 │
@@ -306,18 +349,52 @@ python scripts/validation/analyze_account_unification.py
 
 ## 保守・運用
 
-### データ更新手順
+### PLデータ更新手順
 1. 新年度CSVを`data/monthly_pl/`に配置（例: `R7_monthly.csv`）
 2. ファイル名が`{年度}_monthly.csv`形式であることを確認
 3. エンコーディングがShift-JISであることを確認
 4. アプリを再起動（自動で新年度を認識）
 
-### 科目追加手順
+### BSデータ更新手順
+1. 新年度CSVを`data/monthly_bs/`に配置（例: `R7_monthly_bs.csv`）
+2. ファイル名が`{年度}_monthly_bs.csv`形式であることを確認
+3. 列名が「コード」であることを確認（「科目コード」ではない）
+4. 月次列名に「当月残高」が含まれることを確認
+5. エンコーディングがShift-JISであることを確認
+6. アプリを再起動（自動で新年度を認識）
+
+### PL科目追加手順
 1. `config/account_master.csv`に行を追加
 2. 表示順を設定
 3. アプリを再起動
 
+### BS科目追加手順
+1. `config/bs_account_master.csv`に行を追加
+2. 表示順を設定
+3. アプリを再起動
+
+## Phase 1.5: BS機能実装（完了）
+
+**実装日:** 2025-12-09
+
+**追加機能:**
+- タブUI（st.tabs）によるPL/BS切り替え
+- BS専用の科目マスタ（29科目）
+- BS月次残高推移グラフ
+- BS年度比較テーブル（月度平均行含む）
+- BS 3階層集計（個別科目、中分類、大分類）
+- BSデータCSV/Excelエクスポート
+
+**実装ファイル:**
+- `config/bs_account_master.csv` - BS科目マスタ（新規作成）
+- `modules/data_loader.py` - BS読み込み関数追加
+- `modules/visualizer.py` - BSグラフ・テーブル関数追加
+- `app.py` - タブUI統合
+- `test_bs_functions.py` - 単体テスト（新規作成）
+
+**テスト結果:** 4/4 合格
+
 ---
 
 **最終更新:** 2025-12-09
-**バージョン:** 1.0.0
+**バージョン:** 1.1.0
