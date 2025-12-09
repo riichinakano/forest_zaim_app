@@ -12,6 +12,8 @@
 
 例:
 - `H27_monthly.csv` (平成27年度)
+- `H31_monthly.csv` (平成31年度/令和元年度)
+- `R2_monthly.csv` (令和2年度)
 - `R6_monthly.csv` (令和6年度)
 
 ### CSVファイル形式

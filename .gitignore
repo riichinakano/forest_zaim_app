@@ -58,8 +58,18 @@ dmypy.json
 data/monthly_pl/*.csv
 # data/monthly_pl/README.md は含める
 
+# Cashflow data (内部情報を含むため除外)
+data/cashflow/*.xlsx
+# data/cashflow/README.md は含める
+
 # Logs
 *.log
 
 # OS
 Thumbs.db
+nul
+
+# Temporary files
+tmp/
+temp/
+*.tmp
