@@ -30,7 +30,8 @@ def create_monthly_trend_chart(
     years: List[str],
     account_name: Optional[str] = None,
     df_master: Optional[pd.DataFrame] = None,
-    category_filter: Optional[str] = None
+    category_filter: Optional[str] = None,
+    subcategory_filter: Optional[str] = None
 ) -> go.Figure:
     """
     月次推移の折れ線グラフを作成
@@ -42,6 +43,7 @@ def create_monthly_trend_chart(
         account_name: 科目名（グラフタイトル用、Noneの場合はdfから取得）
         df_master: 科目マスタ（合算時に使用）
         category_filter: 大分類フィルタ（'収益'または'費用'）
+        subcategory_filter: 中分類フィルタ（'製造原価'、'販管費'等）
 
     Returns:
         plotly.graph_objects.Figure: 月次推移グラフ
@@ -59,7 +61,9 @@ def create_monthly_trend_chart(
 
     # 科目名を取得（未指定の場合）
     if account_name is None:
-        if category_filter:
+        if subcategory_filter:
+            account_name = f"中分類：{subcategory_filter}（合算）"
+        elif category_filter:
             account_name = f"大分類：{category_filter}（合算）"
         else:
             account_data = df[df['科目コード'] == account_code]
@@ -70,8 +74,24 @@ def create_monthly_trend_chart(
 
     # 年度ごとにデータを追加
     for year in years:
-        # 合算の場合
-        if category_filter and df_master is not None:
+        # 中分類での合算の場合
+        if subcategory_filter and df_master is not None:
+            # マスタから該当中分類の科目コードを取得
+            category_codes = df_master[df_master['中分類'] == subcategory_filter]['科目コード'].tolist()
+
+            # 該当年度・該当科目のデータを抽出して合算
+            year_data = df[(df['年度'] == year) & (df['科目コード'].isin(category_codes))]
+
+            if year_data.empty:
+                continue
+
+            # 月次データを合算
+            monthly_values = []
+            for month in months:
+                total = year_data[month].sum() if month in year_data.columns else 0
+                monthly_values.append(total)
+        # 大分類での合算の場合
+        elif category_filter and df_master is not None:
             # マスタから該当大分類の科目コードを取得
             category_codes = df_master[df_master['大分類'] == category_filter]['科目コード'].tolist()
 
@@ -165,7 +185,8 @@ def create_comparison_table(
     account_code: int,
     years: List[str],
     df_master: Optional[pd.DataFrame] = None,
-    category_filter: Optional[str] = None
+    category_filter: Optional[str] = None,
+    subcategory_filter: Optional[str] = None
 ) -> pd.DataFrame:
     """
     年度比較テーブルを作成
@@ -176,6 +197,7 @@ def create_comparison_table(
         years: 表示する年度のリスト
         df_master: 科目マスタ（合算時に使用）
         category_filter: 大分類フィルタ（'収益'または'費用'）
+        subcategory_filter: 中分類フィルタ（'製造原価'、'販管費'等）
 
     Returns:
         pd.DataFrame: 比較テーブル（列: 年度, 4月, ..., 3月, 年間合計, 前年比）
@@ -186,8 +208,28 @@ def create_comparison_table(
     result_data = []
 
     for i, year in enumerate(years):
-        # 合算の場合
-        if category_filter and df_master is not None:
+        # 中分類での合算の場合
+        if subcategory_filter and df_master is not None:
+            # マスタから該当中分類の科目コードを取得
+            category_codes = df_master[df_master['中分類'] == subcategory_filter]['科目コード'].tolist()
+
+            # 該当年度・該当科目のデータを抽出
+            year_data = df[(df['年度'] == year) & (df['科目コード'].isin(category_codes))]
+
+            if year_data.empty:
+                continue
+
+            row = {'年度': year}
+
+            # 月次データを合算
+            for month in months:
+                total = year_data[month].sum() if month in year_data.columns else 0
+                row[month] = total
+
+            # 年間合計を合算
+            row['年間合計'] = year_data['年間合計'].sum()
+        # 大分類での合算の場合
+        elif category_filter and df_master is not None:
             # マスタから該当大分類の科目コードを取得
             category_codes = df_master[df_master['大分類'] == category_filter]['科目コード'].tolist()
 
