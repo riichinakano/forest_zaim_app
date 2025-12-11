@@ -69,6 +69,10 @@ data/fs/
 data/cashflow/*.xlsx
 # data/cashflow/README.md は含める
 
+# AIチャット機能 - アップロードファイル・ログ（Phase 2）
+data/uploaded/
+notebooks/chat_logs/
+
 # Logs
 *.log
 
