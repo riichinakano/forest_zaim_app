@@ -195,13 +195,13 @@ def load_monthly_data(data_dir: str = "data/monthly_pl") -> pd.DataFrame:
     return result
 
 
-@st.cache_data(ttl=3600)  # 1時間キャッシュ
+@st.cache_data(ttl=None)  # アプリ起動中ずっと保持
 def load_all_data(data_dir: str = "data/monthly_pl") -> pd.DataFrame:
     """
     全データを読み込む（キャッシュ付き）
 
     Streamlitアプリケーション内での使用を想定。
-    データの再読み込みを最小限にするため、1時間キャッシュします。
+    データの再読み込みを最小限にするため、アプリ起動中ずっとキャッシュします。
 
     Args:
         data_dir: 月次データディレクトリのパス
@@ -413,13 +413,13 @@ def load_bs_monthly_data(data_dir: str = "data/monthly_bs") -> pd.DataFrame:
     return result
 
 
-@st.cache_data(ttl=3600)  # 1時間キャッシュ
+@st.cache_data(ttl=None)  # アプリ起動中ずっと保持
 def load_all_bs_data(data_dir: str = "data/monthly_bs") -> pd.DataFrame:
     """
     全BSデータを読み込む（キャッシュ付き）
 
     Streamlitアプリケーション内での使用を想定。
-    データの再読み込みを最小限にするため、1時間キャッシュします。
+    データの再読み込みを最小限にするため、アプリ起動中ずっとキャッシュします。
 
     Args:
         data_dir: BS月次データディレクトリのパス

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from modules.gemini_chat import GeminiClient, CodeExecutor
 from modules.financial_analyzer import DataLoader, ConversationLogger
+from modules.data_loader import load_all_data, load_all_bs_data, load_master_cached, load_bs_master_cached
 
 
 # ページ設定
@@ -47,18 +48,49 @@ def initialize_session_state():
     if "pending_question" not in st.session_state:
         st.session_state.pending_question = None
 
+    if "executing_code" not in st.session_state:
+        st.session_state.executing_code = False
 
-def execute_code_and_display(code, question, api_key, selected_model, selected_model_display, export_formats):
+    # 起動時に全データをロード（キャッシュに保存）
+    if 'financial_data_loaded' not in st.session_state:
+        with st.spinner('財務データを読み込み中...'):
+            st.session_state.pl_data = load_all_data('data/monthly_pl')
+            st.session_state.bs_data = load_all_bs_data('data/monthly_bs')
+            st.session_state.pl_master = load_master_cached('config')
+            st.session_state.bs_master = load_bs_master_cached('config')
+            st.session_state.financial_data_loaded = True
+
+
+def execute_code_and_display(code, question, api_key, selected_model, selected_model_display, export_formats, tokens_used=0, question_type="code_execution"):
     """コードを実行して結果を表示"""
-    with st.spinner("コードを実行しています..."):
+    import time
+    start_time = time.time()
+
+    # トークン数をセッションに追加
+    st.session_state.total_tokens += tokens_used
+
+    # 【要件1-3】段階的な進捗表示
+    with st.status("処理中...", expanded=True) as status:
+        status.update(label="コード検証中...", state="running")
+        is_safe, error_msg = CodeExecutor.validate_code(code)
+
+        if not is_safe:
+            status.update(label="安全性チェック失敗", state="error", expanded=True)
+            st.error(f"⚠️ 安全性チェックに失敗しました: {error_msg}")
+            return
+
+        status.update(label="コード実行中...", state="running")
         result = CodeExecutor.execute_code(code)
 
         if result["success"]:
+            saved_paths = None  # saved_pathsを事前に初期化
+
             # 回答を表示
             st.markdown(result["answer"])
 
             # グラフを表示
             if result["figure"]:
+                status.update(label="グラフ描画中...", state="running")
                 st.plotly_chart(result["figure"], use_container_width=True)
 
                 # グラフを保存
@@ -86,14 +118,21 @@ def execute_code_and_display(code, question, api_key, selected_model, selected_m
             st.session_state.messages.append(assistant_message)
 
             # ログに保存
+            processing_time = time.time() - start_time
             graph_paths = saved_paths if export_formats and result["figure"] else None
             ConversationLogger.save_message(
                 st.session_state.session_id,
                 role="assistant",
                 content=result["answer"],
                 code=code,
-                graph_paths=graph_paths
+                graph_paths=saved_paths,
+                model_name=selected_model_display,
+                question_type=question_type,
+                processing_time=processing_time,
+                tokens_used=tokens_used,
+                has_error=False
             )
+            status.update(label="完了", state="complete", expanded=False)
 
             # 保留中のコードをクリア
             st.session_state.pending_code = None
@@ -101,6 +140,7 @@ def execute_code_and_display(code, question, api_key, selected_model, selected_m
 
         else:
             # エラーメッセージを表示
+            status.update(label="実行エラー", state="error", expanded=True)
             st.error(f"❌ 実行エラー: {result['error']}")
 
             # 自動修正を試みる（最大3回）
@@ -113,8 +153,9 @@ def execute_code_and_display(code, question, api_key, selected_model, selected_m
             )
 
             for attempt in range(3):
+                status.update(label=f"エラー修正中... ({attempt + 1}/3)", state="running")
                 # エラーをフィードバックしてコード再生成
-                generated_code = client.generate_code(
+                generated_code, retry_tokens = client.generate_code(
                     user_question=f"{question}\n\n【エラー】前回のコードで以下のエラーが発生しました:\n{result['error']}\n\nエラーを修正したコードを生成してください。",
                     available_files=available_files,
                     uploaded_files=st.session_state.uploaded_files_list,
@@ -124,6 +165,7 @@ def execute_code_and_display(code, question, api_key, selected_model, selected_m
                 # 再実行
                 result = CodeExecutor.execute_code(generated_code)
                 if result["success"]:
+                    st.session_state.total_tokens += retry_tokens # 成功した場合のみトークン数を加算
                     st.success(f"✅ 修正されたコードの実行に成功しました（試行回数: {attempt + 1}）")
                     st.markdown(result["answer"])
 
@@ -143,21 +185,65 @@ def execute_code_and_display(code, question, api_key, selected_model, selected_m
                     st.session_state.messages.append(assistant_message)
 
                     # ログに保存
+                    processing_time = time.time() - start_time
                     ConversationLogger.save_message(
                         st.session_state.session_id,
                         role="assistant",
                         content=result["answer"],
-                        code=generated_code
+                        code=generated_code,
+                        model_name=selected_model_display, # 修正後のモデル名
+                        question_type=question_type,
+                        processing_time=processing_time,
+                        tokens_used=tokens_used + retry_tokens,
+                        has_error=False
                     )
+                    status.update(label="修正完了", state="complete", expanded=False)
 
                     # 保留中のコードをクリア
                     st.session_state.pending_code = None
                     st.session_state.pending_question = None
                     break
             else:
+                processing_time = time.time() - start_time
+                status.update(label="自動修正失敗", state="error", expanded=True)
                 st.error("自動修正に失敗しました。質問を言い換えて再度お試しください。")
+                # エラーログを保存
+                ConversationLogger.save_message(
+                    st.session_state.session_id,
+                    role="assistant",
+                    content=f"エラー: {result['error']}",
+                    code=generated_code, # 最後に試したコードを保存
+                    model_name=selected_model_display,
+                    question_type="code_execution",
+                    processing_time=processing_time,
+                    tokens_used=tokens_used,
+                    has_error=True
+                )
                 st.session_state.pending_code = None
                 st.session_state.pending_question = None
+
+
+def get_or_create_client(api_key, selected_model):
+    """
+    Geminiクライアントをセッションステートから取得または新規作成する
+    モデルが変更された場合に再生成する
+    """
+    if 'gemini_client' not in st.session_state or st.session_state.gemini_client.model_name != selected_model:
+        st.session_state.gemini_client = GeminiClient(selected_model, api_key)
+    return st.session_state.gemini_client
+
+
+def get_or_create_conversation_history(session_id):
+    """
+    会話履歴をセッションステートから取得または新規作成する
+    """
+    # この例では毎回読み込むが、パフォーマンスが問題ならキャッシュも検討
+    return ConversationLogger.get_conversation_history(session_id)
+
+
+def get_or_create_available_files():
+    """利用可能なファイルリストを取得"""
+    return DataLoader.list_available_files()
 
 
 def main():
@@ -182,21 +268,71 @@ def main():
     with st.sidebar:
         st.header("⚙️ 設定")
 
+        # 基本設定
+        st.subheader("1. 基本設定")
+
         # モデル選択
-        st.subheader("1. モデル選択")
         models = GeminiClient.get_available_models()
-        selected_model_display = st.radio(
-            "使用するモデル",
+        selected_model_display = st.selectbox(
+            "🤖 使用モデル",
             options=list(models.keys()),
             index=0,
+            help="Flash: 高速、Pro: 高精度",
             key="model_select"
         )
         selected_model = models[selected_model_display]
 
+        # セッションステートに保存
+        if 'selected_model' not in st.session_state:
+            st.session_state.selected_model = selected_model
+        else:
+            st.session_state.selected_model = selected_model
+
+        # トークン数表示
+        if 'total_tokens' not in st.session_state:
+            st.session_state.total_tokens = 0
+
+        st.metric(
+            "今セッションの使用量",
+            value=f"{st.session_state.total_tokens:,} tokens",
+            help="APIリクエストで使用したトークン数"
+        )
+
+        st.markdown("---")
+
+        # セッション管理
+        st.subheader("2. 会話セッション")
+
+        # 新規セッション開始
+        theme_input = st.text_input("セッションのテーマ（任意）", value="一般", key="theme_input")
+        if st.button("🆕 新規セッション開始", use_container_width=True):
+            session_id = ConversationLogger.create_session(theme_input)
+            st.session_state.session_id = session_id
+            st.session_state.messages = []
+            st.session_state.graph_counter = 0
+            st.session_state.pending_code = None
+            st.session_state.pending_question = None
+            st.session_state.total_tokens = 0  # トークン数もリセット
+            st.success(f"✅ 新規セッション開始: {session_id}")
+            st.rerun()
+
+        # 会話保存
+        if st.session_state.session_id and st.session_state.messages:
+            if st.button("💾 会話を保存", use_container_width=True):
+                try:
+                    md_path = ConversationLogger.export_markdown(
+                        st.session_state.session_id,
+                        model_name=selected_model_display
+                    )
+                    st.success(f"✅ 会話を保存しました")
+                    st.caption(f"保存先: {md_path}")
+                except Exception as e:
+                    st.error(f"保存エラー: {e}")
+
         st.markdown("---")
 
         # 参考資料アップロード
-        st.subheader("2. 参考資料アップロード")
+        st.subheader("3. 参考資料アップロード")
         st.caption("CSV, Excel (.xlsx) 対応")
 
         uploaded_files = st.file_uploader(
@@ -234,7 +370,7 @@ def main():
         st.markdown("---")
 
         # グラフ保存設定
-        st.subheader("3. グラフ保存形式")
+        st.subheader("4. グラフ保存形式")
         export_formats = st.multiselect(
             "保存形式を選択",
             options=["HTML", "PNG"],
@@ -244,41 +380,12 @@ def main():
 
         st.markdown("---")
 
-        # セッション管理
-        st.subheader("4. 会話セッション")
-
-        # 新規セッション開始
-        theme_input = st.text_input("セッションのテーマ（任意）", value="一般", key="theme_input")
-        if st.button("🆕 新規セッション開始", use_container_width=True):
-            session_id = ConversationLogger.create_session(theme_input)
-            st.session_state.session_id = session_id
-            st.session_state.messages = []
-            st.session_state.graph_counter = 0
-            st.session_state.pending_code = None
-            st.session_state.pending_question = None
-            st.success(f"✅ 新規セッション開始: {session_id}")
-            st.rerun()
-
-        # 会話保存
-        if st.session_state.session_id and st.session_state.messages:
-            if st.button("💾 会話を保存", use_container_width=True):
-                try:
-                    md_path = ConversationLogger.export_markdown(
-                        st.session_state.session_id,
-                        model_name=selected_model_display
-                    )
-                    st.success(f"✅ 会話を保存しました")
-                    st.caption(f"保存先: {md_path}")
-                except Exception as e:
-                    st.error(f"保存エラー: {e}")
-
-        st.markdown("---")
-
         # 情報表示
         if st.session_state.session_id:
             st.caption(f"📝 セッションID: {st.session_state.session_id}")
         st.caption(f"🤖 モデル: {selected_model_display}")
         st.caption(f"💬 メッセージ数: {len(st.session_state.messages)}")
+
 
     # メインエリア
     # セッションがない場合は開始を促す
@@ -299,26 +406,37 @@ def main():
             if "data" in message and message["data"] is not None:
                 st.dataframe(message["data"], use_container_width=True)
 
+    # コード実行中の場合
+    if st.session_state.get("executing_code"):
+        execute_code_and_display(
+            st.session_state.pending_code,
+            st.session_state.pending_question,
+            api_key,
+            selected_model,
+            selected_model_display,
+            export_formats,
+            tokens_used=st.session_state.get('pending_tokens', 0),
+            question_type="code_execution"
+        )
+        # 実行が終わったらフラグをリセット
+        st.session_state.executing_code = False
+        st.rerun()
+
     # 保留中のコードがある場合は承認UIを表示
-    if st.session_state.pending_code:
+    elif st.session_state.pending_code:
         with st.chat_message("assistant"):
             with st.expander("📝 生成されたコード", expanded=True):
                 st.code(st.session_state.pending_code, language="python")
 
-                col1, col2 = st.columns(2)
+                col1, col2, _ = st.columns([1, 1, 3])
                 with col1:
                     if st.button("▶️ 実行", type="primary", key="execute_btn"):
-                        execute_code_and_display(
-                            st.session_state.pending_code,
-                            st.session_state.pending_question,
-                            api_key,
-                            selected_model,
-                            selected_model_display,
-                            export_formats
-                        )
+                        # 実行フラグを立てて再実行
+                        st.session_state.executing_code = True
                         st.rerun()
                 with col2:
                     if st.button("❌ キャンセル", key="cancel_btn"):
+                        st.session_state.executing_code = False
                         st.session_state.pending_code = None
                         st.session_state.pending_question = None
                         st.warning("コードの実行をキャンセルしました")
@@ -336,8 +454,12 @@ def main():
             content=prompt
         )
 
+        # 以前の実行フラグが残っている場合はクリア
+        if st.session_state.get("executing_code"):
+            st.session_state.executing_code = False
+
         # Gemini APIでコード生成
-        with st.spinner("コードを生成しています..."):
+        with st.spinner("コード生成中..."):
             try:
                 # 利用可能なファイル一覧を取得
                 available_files = DataLoader.list_available_files()
@@ -351,7 +473,7 @@ def main():
                 )
 
                 # コード生成
-                generated_code = client.generate_code(
+                generated_code, tokens = client.generate_code(
                     user_question=prompt,
                     available_files=available_files,
                     uploaded_files=st.session_state.uploaded_files_list,
@@ -367,12 +489,15 @@ def main():
 
                     # 再生成を試みる（最大3回）
                     for attempt in range(3):
-                        generated_code = client.generate_code(
+                        generated_code, retry_tokens = client.generate_code(
                             user_question=f"{prompt}\n\n【注意】前回のコードで以下のエラーが発生しました: {error_message}\n安全なコードを生成してください。",
                             available_files=available_files,
                             uploaded_files=st.session_state.uploaded_files_list,
                             conversation_history=conversation_history
                         )
+                        if 'total_tokens' not in st.session_state:
+                            st.session_state.total_tokens = 0
+                        st.session_state.total_tokens += retry_tokens
 
                         is_safe, error_message = CodeExecutor.validate_code(generated_code)
                         if is_safe:
@@ -385,6 +510,7 @@ def main():
                 # コードを保留状態に設定
                 st.session_state.pending_code = generated_code
                 st.session_state.pending_question = prompt
+                st.session_state.pending_tokens = tokens
 
                 # ページを再読み込みして承認UIを表示
                 st.rerun()

@@ -22,7 +22,8 @@ class GeminiClient:
 
     # 利用可能なモデル一覧（無料枠で使用可能なモデルのみ）
     AVAILABLE_MODELS = {
-        "Gemini 2.5 Flash（推奨）★": "gemini-2.5-flash"
+        "Gemini 2.5 Flash（高速・推奨）★": "gemini-2.5-flash",
+        "Gemini 2.5 Pro（高精度・複雑な分析）": "gemini-2.5-pro"
     }
 
     def __init__(self, model_name: str, api_key: str):
@@ -41,7 +42,7 @@ class GeminiClient:
         available_files: Dict[str, List[str]],
         uploaded_files: Optional[List[str]] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
+    ) -> Tuple[str, int]:
         """
         ユーザーの質問からPythonコードを生成
 
@@ -52,7 +53,7 @@ class GeminiClient:
             conversation_history: 会話履歴
 
         Returns:
-            生成されたPythonコード
+            (生成されたPythonコード, 使用トークン数)
         """
         # システムプロンプトの構築
         system_prompt = self._build_system_prompt(available_files, uploaded_files)
@@ -73,10 +74,13 @@ class GeminiClient:
         # コード生成
         response = self.model.generate_content(full_prompt)
 
+        # トークン数を取得
+        tokens = response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0
+
         # コードを抽出（```python ... ``` の部分を取り出す）
         code = self._extract_code_from_response(response.text)
 
-        return code
+        return code, tokens
 
     def _build_system_prompt(
         self,
@@ -98,6 +102,29 @@ class GeminiClient:
 
         prompt = f"""あなたは林業経営者向けの財務分析AIアシスタントです。
 ユーザーの質問に対して、Pythonコードを生成して財務データを分析します。
+
+【データアクセス方法】
+データは起動時に読み込み済みです。以下の関数を使用してください:
+
+from modules.data_loader import load_all_data, load_all_bs_data, load_master_cached, load_bs_master_cached
+
+# 全年度のPLデータを取得（DataFrameが返る、年度列で全年度が含まれる）
+df_pl = load_all_data('data/monthly_pl')
+# 列: ['年度', '科目コード', '科目名称', '4月', '5月', ..., '3月', '年間合計']
+# 使用例: df_r6 = df_pl[df_pl['年度'] == 'R6']
+
+# 全年度のBSデータを取得（DataFrameが返る、年度列で全年度が含まれる）
+df_bs = load_all_bs_data('data/monthly_bs')
+# 列: ['年度', '科目コード', '科目名称', '4月', '5月', ..., '3月', '年間合計']
+# 使用例: df_r6_bs = df_bs[df_bs['年度'] == 'R6']
+
+# PL科目マスタ（キャッシュから高速取得）
+master_pl = load_master_cached('config')
+
+# BS科目マスタ（キャッシュから高速取得）
+master_bs = load_bs_master_cached('config')
+
+重要: CSVファイルを直接pd.read_csv()で読み込まないでください。上記の関数はDataFrameを返します（辞書ではありません）。
 
 【データ構造】
 1. 損益計算書（PL）データ
@@ -123,36 +150,63 @@ class GeminiClient:
 3. 貸借対照表（BS）データ
    - 場所: data/monthly_bs/{{年度}}_monthly_bs.csv
    - エンコーディング: Shift-JIS
-   - 列: コード, 科目名称, 4月（当月残高）, 5月（当月残高）, ..., 3月（当月残高）
-   - 注意: PLは「科目コード」列、BSは「コード」列
+   - 重要: load_all_bs_data()で読み込むと、列名は統一されます
+   - load_all_bs_data()の返り値の列: ['年度', '科目コード', '科目名称', '4月', '5月', ..., '3月', '年間合計']
+   - 注意: 元のCSVファイルは「コード」列だが、load_all_bs_data()は「科目コード」列に変換済み
+   - BSデータの月次列は「当月残高」を示す（PLの「当月金額」とは異なる性質）
 
 4. 科目マスタ
    - PL: config/account_master.csv（UTF-8）
    - BS: config/bs_account_master.csv（UTF-8）
    - 列: 科目コード, 科目名, 大分類, 中分類, 表示順
+   - BSマスタとBSデータは「科目コード」列でマージ可能
 
 {files_str}
 
 【データ読み込みと集計の例】
 ```python
-# 年度データの読み込み
-df = pd.read_csv('data/monthly_pl/R6_monthly.csv', encoding='shift-jis')
+# 正しい方法: キャッシュ関数を使用
+from modules.data_loader import load_all_data, load_master_cached
+
+# 全年度のPLデータを取得
+df_pl = load_all_data('data/monthly_pl')
+
+# 令和6年度のデータのみ抽出
+df_r6 = df_pl[df_pl['年度'] == 'R6']
 
 # 科目マスタの読み込み
-master = pd.read_csv('config/account_master.csv', encoding='utf-8')
+master = load_master_cached('config')
 
-# 年間合計の計算
+# 月次列の定義
 months = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月']
-df['年間合計'] = df[months].sum(axis=1)
 
 # 中分類ごとの集計（例: 売上高）
-df_merged = df.merge(master, on='科目コード', how='left')
+df_merged = df_r6.merge(master, on='科目コード', how='left')
 sales = df_merged[df_merged['中分類'] == '売上']['年間合計'].sum()
 
 # 売上総利益の計算
 revenue = df_merged[df_merged['大分類'] == '収益']['年間合計'].sum()
 cost = df_merged[df_merged['中分類'] == '製造原価']['年間合計'].sum()
 gross_profit = revenue - cost
+
+# BSデータの例（令和6年度の現預金残高推移）
+from modules.data_loader import load_all_bs_data, load_bs_master_cached
+
+df_bs = load_all_bs_data('data/monthly_bs')
+df_r6_bs = df_bs[df_bs['年度'] == 'R6']
+master_bs = load_bs_master_cached('config')
+
+# 中分類で検索（例: 現金及び預金 = すべての現金・預金口座）
+# BSマスタで科目コードを特定
+cash_codes = master_bs[master_bs['中分類'] == '現金及び預金']['科目コード'].tolist()
+df_cash = df_r6_bs[df_r6_bs['科目コード'].isin(cash_codes)]
+# 注意: 科目名で部分一致検索すると、一部のアカウントのみ取得される可能性があります
+# 例: '現金'で検索すると科目コード111のみで、預金口座(130, 131)が除外されます
+
+# 間違った方法（使用禁止）:
+# df = pd.read_csv('data/monthly_pl/R6_monthly.csv', encoding='shift-jis')  # NG!
+# df_bs = load_all_bs_data('data/monthly_bs')
+# df_r6_bs = df_bs['R6']  # NG! 辞書ではなくDataFrameです
 ```
 
 【コード生成ルール】

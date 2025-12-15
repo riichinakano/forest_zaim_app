@@ -132,7 +132,12 @@ class ConversationLogger:
         role: str,
         content: str,
         code: Optional[str] = None,
-        graph_paths: Optional[Dict[str, str]] = None
+        graph_paths: Optional[Dict[str, str]] = None,
+        model_name: Optional[str] = None,
+        question_type: Optional[str] = None,
+        processing_time: Optional[float] = None,
+        tokens_used: Optional[int] = None,
+        has_error: bool = False
     ):
         """
         メッセージをログに追加
@@ -143,6 +148,11 @@ class ConversationLogger:
             content: メッセージ内容
             code: 生成されたコード（assistantのみ）
             graph_paths: グラフの保存パス
+            model_name: 使用したモデル名
+            question_type: 質問タイプ（text_only / code_execution）
+            processing_time: 処理時間（秒）
+            tokens_used: 使用トークン数
+            has_error: エラー有無
         """
         # セッションディレクトリの確認
         session_dir = Path(f"notebooks/chat_logs/{session_id}")
@@ -157,7 +167,12 @@ class ConversationLogger:
         message = {
             "timestamp": datetime.now().isoformat(),
             "role": role,
-            "content": content
+            "content": content,
+            "model_name": model_name,
+            "question_type": question_type,
+            "processing_time": processing_time,
+            "tokens_used": tokens_used,
+            "has_error": has_error
         }
 
         if code:
